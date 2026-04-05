@@ -1,0 +1,37 @@
+{
+  "schema_version": "1.0",
+  "server": "eu.ansvar/croatian-competition-mcp",
+  "jurisdiction": "HR",
+  "sources": [
+    {
+      "id": "aztn",
+      "name": "AZTN — Agencija za zaštitu tržišnog natjecanja",
+      "name_en": "Croatian Competition Agency",
+      "url": "https://www.aztn.hr/",
+      "jurisdiction": "HR",
+      "license": "Public domain — official government publications",
+      "content_types": ["decisions", "mergers", "sectors"]
+    }
+  ],
+  "coverage": {
+    "decisions": {
+      "types": ["abuse_of_dominance", "cartel", "sector_inquiry", "unfair_competition"],
+      "outcomes": ["infringement", "commitment", "no_infringement", "fine"],
+      "language": "hr",
+      "notes": "Historical coverage may be incomplete for decisions before AZTN digital publication programme."
+    },
+    "mergers": {
+      "outcomes": ["cleared", "cleared_with_conditions", "blocked", "withdrawn"],
+      "language": "hr",
+      "notes": "Covers Croatian merger notification thresholds under ZZTN."
+    }
+  },
+  "known_gaps": [
+    "Pre-digital historical decisions may be absent",
+    "Redacted confidential decisions not included",
+    "Informal guidance and comfort letters not included",
+    "Court appeal outcomes not systematically tracked"
+  ],
+  "update_frequency": "periodic",
+  "generated_at": "2026-04-05"
+}
