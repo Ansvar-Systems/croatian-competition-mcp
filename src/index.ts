@@ -26,6 +26,9 @@ import {
   searchMergers,
   getMerger,
   listSectors,
+  listSources,
+  getDataFreshness,
+  getDataAge,
 } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -156,6 +159,26 @@ const TOOLS = [
       required: [],
     },
   },
+  {
+    name: "hr_comp_list_sources",
+    description:
+      "List authoritative data sources used by this MCP server, with provenance metadata including URL, jurisdiction, and license.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
+  {
+    name: "hr_comp_check_data_freshness",
+    description:
+      "Check the freshness of the underlying AZTN data. Returns record counts and the latest decision/merger date ingested, so callers can assess how current the data is.",
+    inputSchema: {
+      type: "object" as const,
+      properties: {},
+      required: [],
+    },
+  },
 ];
 
 // --- Zod schemas for argument validation --------------------------------------
@@ -185,10 +208,23 @@ const GetMergerArgs = z.object({
 
 // --- Helper ------------------------------------------------------------------
 
+const META = {
+  disclaimer:
+    "Data sourced from AZTN (Croatian Competition Agency). For research use only — not legal advice. Verify all references against primary sources before making compliance decisions.",
+  source_url: "https://www.aztn.hr/",
+  copyright: "AZTN — Agencija za zaštitu tržišnog natjecanja",
+};
+
 function textContent(data: unknown) {
+  const dataAge = getDataAge();
+  const meta = { ...META, data_age: dataAge };
+  const payload =
+    typeof data === "object" && data !== null
+      ? { _meta: meta, ...(data as object) }
+      : { _meta: meta, value: data };
   return {
     content: [
-      { type: "text" as const, text: JSON.stringify(data, null, 2) },
+      { type: "text" as const, text: JSON.stringify(payload, null, 2) },
     ],
   };
 }
@@ -276,6 +312,16 @@ server.setRequestHandler(CallToolRequestSchema, async (request) => {
           },
           tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
         });
+      }
+
+      case "hr_comp_list_sources": {
+        const sources = listSources();
+        return textContent({ sources, count: sources.length });
+      }
+
+      case "hr_comp_check_data_freshness": {
+        const freshness = getDataFreshness();
+        return textContent(freshness);
       }
 
       default:
