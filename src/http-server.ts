@@ -29,6 +29,9 @@ import {
   searchMergers,
   getMerger,
   listSectors,
+  listSources,
+  getDataFreshness,
+  getDataAge,
 } from "./db.js";
 
 const __filename = fileURLToPath(import.meta.url);
@@ -53,23 +56,32 @@ const TOOLS = [
   {
     name: "hr_comp_search_decisions",
     description:
-      "Full-text search across Bundeskartellamt enforcement decisions (abuse of dominance, cartel, sector inquiries). Returns matching decisions with case number, parties, outcome, fine amount, and AZTN articles cited.",
+      "Full-text search across AZTN competition enforcement decisions. Covers abuse of dominance, cartel enforcement, and sector inquiries under Croatian competition law (Zakon o zaštiti tržišnog natjecanja — ZZTN). Returns matching decisions with case number, parties, sector, outcome, and summary.",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'Marktmissbrauch', 'Facebook', 'Preisabsprache')" },
+        query: {
+          type: "string",
+          description: "Search query (e.g., 'zlouporaba vladajućeg položaja', 'kartel', 'zaštita tržišnog natjecanja')",
+        },
         type: {
           type: "string",
-          enum: ["abuse_of_dominance", "cartel", "merger", "sector_inquiry"],
-          description: "Filter by decision type. Optional.",
+          enum: ["abuse_of_dominance", "cartel", "sector_inquiry", "unfair_competition"],
+          description: "Filter by case type. Optional.",
         },
-        sector: { type: "string", description: "Filter by sector ID. Optional." },
+        sector: {
+          type: "string",
+          description: "Filter by industry sector (e.g., 'energy', 'telecommunications', 'retail'). Optional.",
+        },
         outcome: {
           type: "string",
-          enum: ["prohibited", "cleared", "cleared_with_conditions", "fine"],
-          description: "Filter by outcome. Optional.",
+          enum: ["infringement", "commitment", "no_infringement", "fine"],
+          description: "Filter by decision outcome. Optional.",
         },
-        limit: { type: "number", description: "Max results (default 20)." },
+        limit: {
+          type: "number",
+          description: "Maximum number of results to return. Defaults to 20.",
+        },
       },
       required: ["query"],
     },
@@ -77,11 +89,14 @@ const TOOLS = [
   {
     name: "hr_comp_get_decision",
     description:
-      "Get a specific Bundeskartellamt decision by case number (e.g., 'B6-22/16').",
+      "Get a specific AZTN competition decision by case number (e.g., 'AZTN/001/2024', 'AZTN/050/2023').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        case_number: { type: "string", description: "Case number (e.g., 'B6-22/16', 'B2-94/12')" },
+        case_number: {
+          type: "string",
+          description: "AZTN case number",
+        },
       },
       required: ["case_number"],
     },
@@ -89,18 +104,27 @@ const TOOLS = [
   {
     name: "hr_comp_search_mergers",
     description:
-      "Search Bundeskartellamt merger control decisions (merger control).",
+      "Search AZTN merger control decisions. Returns merger cases with acquiring party, target, sector, and clearance outcome under Croatian merger control rules (ZZTN).",
     inputSchema: {
       type: "object" as const,
       properties: {
-        query: { type: "string", description: "Search query (e.g., 'Vonovia', 'Energieversorgung')" },
-        sector: { type: "string", description: "Filter by sector ID. Optional." },
+        query: {
+          type: "string",
+          description: "Search query (e.g., 'koncentracija poduzetnika', 'preuzimanje', 'energija')",
+        },
+        sector: {
+          type: "string",
+          description: "Filter by industry sector. Optional.",
+        },
         outcome: {
           type: "string",
-          enum: ["cleared", "cleared_phase1", "cleared_with_conditions", "prohibited"],
+          enum: ["cleared", "cleared_with_conditions", "blocked", "withdrawn"],
           description: "Filter by merger outcome. Optional.",
         },
-        limit: { type: "number", description: "Max results (default 20)." },
+        limit: {
+          type: "number",
+          description: "Maximum number of results to return. Defaults to 20.",
+        },
       },
       required: ["query"],
     },
@@ -108,11 +132,14 @@ const TOOLS = [
   {
     name: "hr_comp_get_merger",
     description:
-      "Get a specific merger control decision by case number (e.g., 'B1-35/21').",
+      "Get a specific AZTN merger control decision by case number (e.g., 'AZTN/M/10/2024').",
     inputSchema: {
       type: "object" as const,
       properties: {
-        case_number: { type: "string", description: "Merger case number (e.g., 'B1-35/21')" },
+        case_number: {
+          type: "string",
+          description: "AZTN merger case number",
+        },
       },
       required: ["case_number"],
     },
@@ -120,7 +147,7 @@ const TOOLS = [
   {
     name: "hr_comp_list_sectors",
     description:
-      "List all sectors with Bundeskartellamt enforcement activity, including decision and merger counts.",
+      "List all industry sectors with AZTN enforcement activity covered in this MCP, with decision and merger counts.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
   },
   {
@@ -129,15 +156,27 @@ const TOOLS = [
       "Return metadata about this MCP server: version, data source, coverage, and tool list.",
     inputSchema: { type: "object" as const, properties: {}, required: [] },
   },
+  {
+    name: "hr_comp_list_sources",
+    description:
+      "List authoritative data sources used by this MCP server, with provenance metadata including URL, jurisdiction, and license.",
+    inputSchema: { type: "object" as const, properties: {}, required: [] },
+  },
+  {
+    name: "hr_comp_check_data_freshness",
+    description:
+      "Check the freshness of the underlying AZTN data. Returns record counts and the latest decision/merger date ingested, so callers can assess how current the data is.",
+    inputSchema: { type: "object" as const, properties: {}, required: [] },
+  },
 ];
 
 // --- Zod schemas -------------------------------------------------------------
 
 const SearchDecisionsArgs = z.object({
   query: z.string().min(1),
-  type: z.enum(["abuse_of_dominance", "cartel", "merger", "sector_inquiry"]).optional(),
+  type: z.enum(["abuse_of_dominance", "cartel", "sector_inquiry", "unfair_competition"]).optional(),
   sector: z.string().optional(),
-  outcome: z.enum(["prohibited", "cleared", "cleared_with_conditions", "fine"]).optional(),
+  outcome: z.enum(["infringement", "commitment", "no_infringement", "fine"]).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
 
@@ -148,7 +187,7 @@ const GetDecisionArgs = z.object({
 const SearchMergersArgs = z.object({
   query: z.string().min(1),
   sector: z.string().optional(),
-  outcome: z.enum(["cleared", "cleared_phase1", "cleared_with_conditions", "prohibited"]).optional(),
+  outcome: z.enum(["cleared", "cleared_with_conditions", "blocked", "withdrawn"]).optional(),
   limit: z.number().int().positive().max(100).optional(),
 });
 
@@ -157,6 +196,13 @@ const GetMergerArgs = z.object({
 });
 
 // --- MCP server factory ------------------------------------------------------
+
+const META = {
+  disclaimer:
+    "Data sourced from AZTN (Croatian Competition Agency). For research use only — not legal advice. Verify all references against primary sources before making compliance decisions.",
+  source_url: "https://www.aztn.hr/",
+  copyright: "AZTN — Agencija za zaštitu tržišnog natjecanja",
+};
 
 function createMcpServer(): Server {
   const server = new Server(
@@ -172,8 +218,14 @@ function createMcpServer(): Server {
     const { name, arguments: args = {} } = request.params;
 
     function textContent(data: unknown) {
+      const dataAge = getDataAge();
+      const meta = { ...META, data_age: dataAge };
+      const payload =
+        typeof data === "object" && data !== null
+          ? { _meta: meta, ...(data as object) }
+          : { _meta: meta, value: data };
       return {
-        content: [{ type: "text" as const, text: JSON.stringify(data, null, 2) }],
+        content: [{ type: "text" as const, text: JSON.stringify(payload, null, 2) }],
       };
     }
 
@@ -237,10 +289,25 @@ function createMcpServer(): Server {
             name: SERVER_NAME,
             version: pkgVersion,
             description:
-              "Bundeskartellamt (German Federal Cartel Office) MCP server. Provides access to German competition law enforcement decisions, merger control cases, and sector enforcement data under the AZTN (Gesetz gegen Wettbewerbsbeschränkungen).",
-            data_source: "Bundeskartellamt (https://www.bundeskartellamt.de/)",
+              "AZTN (Agencija za zaštitu tržišnog natjecanja — Croatian Competition Agency) MCP server. Provides access to competition enforcement decisions, merger control cases, and sector inquiries under Croatian competition law (Zakon o zaštiti tržišnog natjecanja — ZZTN).",
+            data_source: "AZTN (https://www.aztn.hr/)",
+            coverage: {
+              decisions: "AZTN abuse of dominance, cartel, and sector inquiry decisions",
+              mergers: "AZTN merger control decisions under ZZTN",
+              sectors: "Sectors with AZTN enforcement activity",
+            },
             tools: TOOLS.map((t) => ({ name: t.name, description: t.description })),
           });
+        }
+
+        case "hr_comp_list_sources": {
+          const sources = listSources();
+          return textContent({ sources, count: sources.length });
+        }
+
+        case "hr_comp_check_data_freshness": {
+          const freshness = getDataFreshness();
+          return textContent(freshness);
         }
 
         default:

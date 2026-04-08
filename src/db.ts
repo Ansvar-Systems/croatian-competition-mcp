@@ -278,3 +278,65 @@ export function listSectors(): Sector[] {
     .prepare("SELECT * FROM sectors ORDER BY decision_count DESC, merger_count DESC")
     .all() as Sector[];
 }
+
+// --- Metadata queries ---------------------------------------------------------
+
+export interface DataFreshness {
+  decisions: { count: number; latest_date: string | null };
+  mergers: { count: number; latest_date: string | null };
+  checked_at: string;
+}
+
+export function getDataFreshness(): DataFreshness {
+  const db = getDb();
+  const decRow = db
+    .prepare("SELECT COUNT(*) as count, MAX(date) as latest_date FROM decisions")
+    .get() as { count: number; latest_date: string | null };
+  const merRow = db
+    .prepare("SELECT COUNT(*) as count, MAX(date) as latest_date FROM mergers")
+    .get() as { count: number; latest_date: string | null };
+  return {
+    decisions: { count: decRow.count, latest_date: decRow.latest_date },
+    mergers: { count: merRow.count, latest_date: merRow.latest_date },
+    checked_at: new Date().toISOString(),
+  };
+}
+
+export interface SourceInfo {
+  id: string;
+  name: string;
+  name_en: string;
+  url: string;
+  description: string;
+  jurisdiction: string;
+  license: string;
+}
+
+export function listSources(): SourceInfo[] {
+  return [
+    {
+      id: "aztn",
+      name: "AZTN — Agencija za zaštitu tržišnog natjecanja",
+      name_en: "Croatian Competition Agency",
+      url: "https://www.aztn.hr/",
+      description:
+        "Official Croatian competition enforcement authority. Issues decisions on abuse of dominance, cartels, merger control, and unfair competition under the Zakon o zaštiti tržišnog natjecanja (ZZTN).",
+      jurisdiction: "HR",
+      license: "Public domain — official government publications",
+    },
+  ];
+}
+
+export function getDataAge(): string | null {
+  try {
+    const db = getDb();
+    const row = db
+      .prepare(
+        "SELECT MAX(d) as latest FROM (SELECT MAX(date) as d FROM decisions UNION ALL SELECT MAX(date) as d FROM mergers)",
+      )
+      .get() as { latest: string | null };
+    return row.latest;
+  } catch {
+    return null;
+  }
+}
