@@ -4,19 +4,38 @@
 # Build:  docker build -t croatian-competition-mcp .
 # Run:    docker run --rm -p 3000:3000 croatian-competition-mcp
 #
-# The image expects a pre-built database at /app/data/aztn.db.
-# Override with AZTN_DB_PATH for a custom location.
+# The image bakes /app/data/aztn.db at build time. Override AZTN_DB_PATH
+# for a custom location at runtime.
 # ─────────────────────────────────────────────────────────────────────────────
 
-# --- Stage 1: Build TypeScript ---
+# --- Stage 1: Build TypeScript and rebuild native bindings ---
 FROM node:20-slim AS builder
 
 WORKDIR /app
+
+# Native build deps for better-sqlite3 prebuild + compile fallback.
+RUN apt-get update \
+ && apt-get install --no-install-recommends -y python3 make g++ \
+ && rm -rf /var/lib/apt/lists/*
+
 COPY package.json package-lock.json* ./
 RUN npm ci --ignore-scripts
+
+# Native module rebuild — better-sqlite3's prebuild-fetch / native-compile
+# postinstall hook was skipped by --ignore-scripts above. Without this, the
+# .node binding is missing from node_modules and every SQLite call throws
+# "Could not locate the bindings file" at runtime.
+# Source: 2026-05-10 sector MCP binding regression — see plan
+# Ansvar-Architecture-Documentation/docs/superpowers/plans/2026-05-10-sector-mcp-binding-regression-recovery.md
+RUN npm rebuild better-sqlite3
+
 COPY tsconfig.json ./
 COPY src/ src/
 RUN npm run build
+
+# Drop devDependencies in place so the runtime stage can copy a lean
+# node_modules tree that still contains the rebuilt better-sqlite3 binding.
+RUN npm prune --omit=dev
 
 # --- Stage 2: Production ---
 FROM node:20-slim AS production
@@ -25,15 +44,29 @@ WORKDIR /app
 ENV NODE_ENV=production
 ENV AZTN_DB_PATH=/app/data/aztn.db
 
-COPY package.json package-lock.json* ./
-RUN npm ci --omit=dev --ignore-scripts && npm cache clean --force
-
+# Copy node_modules (with the rebuilt .node binding) from the builder.
+# Do NOT run `npm ci` here — the slim runtime has no python3/make/g++ so
+# the rebuild would fail and we'd ship a binding-less image again.
+COPY --from=builder /app/node_modules ./node_modules
 COPY --from=builder /app/dist/ dist/
+COPY package.json package-lock.json* ./
+
+# Bake the pre-built database into the image so /app/data/aztn.db resolves
+# at runtime without a bind mount. This matches the working pattern in
+# cypriot-data-protection-mcp and the Phase A canary fix from the
+# 2026-05-10 sector MCP binding recovery.
+#
+# `data/database.db` is provisioned by ghcr-build.yml's "Provision database"
+# step — it `gh release download`s `database.db.gz` and gunzips to that path.
+# We then COPY it into the image at /app/data/aztn.db (AZTN_DB_PATH). The
+# explicit `data/<name>.db` reference is required for the workflow's grep
+# `COPY\s+\K(data/\S+\.db)` to match.
+COPY data/database.db data/aztn.db
 
 # Non-root user for security
-RUN addgroup --system --gid 1001 mcp && \
-    adduser --system --uid 1001 --ingroup mcp mcp && \
-    chown -R mcp:mcp /app
+RUN addgroup --system --gid 1001 mcp \
+ && adduser --system --uid 1001 --ingroup mcp mcp \
+ && chown -R mcp:mcp /app
 USER mcp
 
 # Health check: verify HTTP server responds
